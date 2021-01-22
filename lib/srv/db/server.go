@@ -31,6 +31,7 @@ import (
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/srv"
 	"github.com/gravitational/teleport/lib/srv/db/common"
+	"github.com/gravitational/teleport/lib/srv/db/mysql"
 	"github.com/gravitational/teleport/lib/srv/db/postgres"
 	"github.com/gravitational/teleport/lib/utils"
 
@@ -377,6 +378,14 @@ func (s *Server) dispatch(sessionCtx *common.Session, streamWriter events.Stream
 	switch sessionCtx.Server.GetProtocol() {
 	case defaults.ProtocolPostgres:
 		return &postgres.Engine{
+			Auth:    auth,
+			Audit:   audit,
+			Context: s.closeContext,
+			Clock:   s.cfg.Clock,
+			Log:     sessionCtx.Log,
+		}, nil
+	case defaults.ProtocolMySQL:
+		return &mysql.Engine{
 			Auth:    auth,
 			Audit:   audit,
 			Context: s.closeContext,

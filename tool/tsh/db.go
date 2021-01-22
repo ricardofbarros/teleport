@@ -25,6 +25,7 @@ import (
 	"github.com/gravitational/teleport/api/types"
 	"github.com/gravitational/teleport/lib/client"
 	dbprofile "github.com/gravitational/teleport/lib/client/db"
+	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/tlsca"
 	"github.com/gravitational/teleport/lib/utils"
 
@@ -233,6 +234,9 @@ func onDatabaseConfig(cf *CLIConf) {
 		utils.FatalError(err)
 	}
 	host, port := tc.WebProxyHostPort()
+	if database.Protocol == defaults.ProtocolMySQL {
+		host, port = tc.MySQLProxyHostPort()
+	}
 	fmt.Printf(`Name:      %v
 Host:      %v
 Port:      %v
