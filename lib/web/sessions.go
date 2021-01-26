@@ -228,7 +228,7 @@ func (c *SessionContext) newRemoteTLSClient(cluster reversetunnel.RemoteSite) (a
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return auth.NewClient(apiclient.Config{Dialer: clusterDialer(cluster), TLS: tlsConfig})
+	return auth.NewClient(apiclient.Config{Dialer: clusterDialer(cluster), Credentials: apiclient.TLSCreds(tlsConfig)})
 }
 
 // GetUser returns the authenticated teleport user
@@ -584,8 +584,8 @@ func (s *sessionCache) ValidateSession(user, sid string) (*SessionContext, error
 	tlsConfig.Time = s.clock.Now
 
 	userClient, err := auth.NewClient(apiclient.Config{
-		Addrs: utils.NetAddrsToStrings(s.authServers),
-		TLS:   tlsConfig,
+		Addrs:       utils.NetAddrsToStrings(s.authServers),
+		Credentials: apiclient.TLSCreds(tlsConfig),
 	})
 	if err != nil {
 		return nil, trace.Wrap(err)
