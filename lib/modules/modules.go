@@ -26,36 +26,33 @@ import (
 	"github.com/gravitational/teleport"
 )
 
+// Features provides supported and unsupported features
+type Features struct {
+	// Kubernetes enables Kubernetes Access product
+	Kubernetes bool
+	// App enables Application Access product
+	App bool
+	// DB enables database access product
+	DB bool
+	// OIDC enables OIDC connectors
+	OIDC bool
+	// SAML enables SAML connectors
+	SAML bool
+	// FIPS enables fips mode controls
+	FIPS bool
+	// AccessWorkflows enables advanced access workflows
+	AccessWorkflows bool
+}
+
 // Modules defines interface that external libraries can implement customizing
 // default teleport behavior
 type Modules interface {
-	// EmptyRoles handler is called when a new trusted cluster with empty roles
-	// is being created
-	EmptyRolesHandler() error
-	// DefaultAllowedLogins returns default allowed logins for a new admin role
-	DefaultAllowedLogins() []string
-	// DefaultKubeUsers returns default kubernetes users for a new admin role
-	DefaultKubeUsers() []string
-	// DefaultKubeGroups returns default kubernetes groups for a new admin role
-	DefaultKubeGroups() []string
 	// PrintVersion prints teleport version
 	PrintVersion()
-	// RolesFromLogins returns roles for external user based on the logins
-	// extracted from the connector
-	RolesFromLogins([]string) []string
-	// TraitsFromLogins returns traits for external user based on the logins
-	// and kubernetes groups extracted from the connector
-	TraitsFromLogins(user string, logins []string, kubeGroups []string, kubeUsers []string) map[string][]string
-	// SupportsKubernetes returns true if this cluster supports kubernetes
-	SupportsKubernetes() bool
 	// IsBoringBinary checks if the binary was compiled with BoringCrypto.
 	IsBoringBinary() bool
-	// DELETE IN: 5.1.0
-	//
-	// ExtendAdminUserRules returns true if the "AdminUserRules" set should be
-	// extended with additional rules to allow user and token management. Only
-	// needed until 5.1 when user and token management will be added to OSS.
-	ExtendAdminUserRules() bool
+	// Features returns supported features
+	Features() Features
 }
 
 // SetModules sets the modules interface
@@ -74,69 +71,22 @@ func GetModules() Modules {
 
 type defaultModules struct{}
 
-// EmptyRolesHandler is called when a new trusted cluster with empty roles
-// is created, no-op by default
-func (p *defaultModules) EmptyRolesHandler() error {
-	return nil
-}
-
-// DefaultKubeUsers returns default kubernetes users for a new admin role
-func (p *defaultModules) DefaultKubeUsers() []string {
-	return []string{teleport.TraitInternalKubeUsersVariable}
-}
-
-// DefaultKubeGroups returns default kubernetes groups for a new admin role
-func (p *defaultModules) DefaultKubeGroups() []string {
-	return []string{teleport.TraitInternalKubeGroupsVariable}
-}
-
-// DefaultAllowedLogins returns allowed logins for a new admin role
-func (p *defaultModules) DefaultAllowedLogins() []string {
-	return []string{teleport.TraitInternalLoginsVariable}
-}
-
 // PrintVersion prints the Teleport version.
 func (p *defaultModules) PrintVersion() {
 	fmt.Printf("Teleport v%s git:%s %s\n", teleport.Version, teleport.Gitref, runtime.Version())
 }
 
-// RolesFromLogins returns roles for external user based on the logins
-// extracted from the connector
-//
-// By default there is only one role, "admin", so logins are ignored and
-// instead used as allowed logins (see TraitsFromLogins below).
-func (p *defaultModules) RolesFromLogins(logins []string) []string {
-	return []string{teleport.AdminRoleName}
-}
-
-// TraitsFromLogins returns traits for external user based on the logins
-// extracted from the connector
-//
-// By default logins are treated as allowed logins user traits.
-func (p *defaultModules) TraitsFromLogins(_ string, logins, kubeGroups, kubeUsers []string) map[string][]string {
-	return map[string][]string{
-		teleport.TraitLogins:     logins,
-		teleport.TraitKubeGroups: kubeGroups,
-		teleport.TraitKubeUsers:  kubeUsers,
+// Features returns supported features
+func (p *defaultModules) Features() Features {
+	return Features{
+		Kubernetes: true,
+		DB:         true,
+		App:        true,
 	}
-}
-
-// SupportsKubernetes returns true if this cluster supports kubernetes
-func (p *defaultModules) SupportsKubernetes() bool {
-	return true
 }
 
 // IsBoringBinary checks if the binary was compiled with BoringCrypto.
 func (p *defaultModules) IsBoringBinary() bool {
-	return false
-}
-
-// DELETE IN: 5.1.0
-//
-// ExtendAdminUserRules returns true if the "AdminUserRules" set should be
-// extended with additional rules to allow user and token management. Only
-// needed until 5.1 when user and token management will be added to OSS.
-func (p *defaultModules) ExtendAdminUserRules() bool {
 	return false
 }
 
