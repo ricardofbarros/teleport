@@ -93,7 +93,6 @@ func (p *credentialProvider) GetCredential(_ string) (string, bool, error) { ret
 // makeServer creates a MySQL server from the accepted client connection that
 // provides access to various parts of the handshake.
 func (p *Proxy) makeServer(clientConn net.Conn) *server.Conn {
-	// TODO(r0mant): Add CLIENT_NO_SCHEMA and CLIENT_DEPRECATE_EOF server capabilities.
 	return server.MakeConn(
 		clientConn,
 		server.NewServer(
@@ -131,19 +130,19 @@ func (p *Proxy) performHandshake(server *server.Conn) (*tls.Conn, error) {
 // waitForOK waits for OK_PACKET from the database service which indicates
 // that auth on the other side completed succesfully.
 func (p *Proxy) waitForOK(server *server.Conn, serviceConn net.Conn) error {
-	packet, packetType, err := protocol.ReadPacket(serviceConn)
+	packet, err := protocol.ParsePacket(serviceConn)
 	if err != nil {
 		return trace.Wrap(err)
 	}
 	p.Log.Debugf("Received packet: %s", packet)
-	switch packetType {
-	case mysql.OK_HEADER:
+	switch packet.(type) {
+	case *protocol.OK:
 		err = server.WriteOK(nil)
 		if err != nil {
 			return trace.Wrap(err)
 		}
-	case mysql.ERR_HEADER:
-		err = server.WritePacket(packet)
+	case *protocol.Error:
+		err = server.WritePacket(packet.Bytes())
 		if err != nil {
 			return trace.Wrap(err)
 		}

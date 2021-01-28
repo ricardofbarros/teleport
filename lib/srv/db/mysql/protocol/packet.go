@@ -21,9 +21,106 @@ import (
 	"net"
 
 	"github.com/gravitational/trace"
+	"github.com/siddontang/go-mysql/mysql"
 )
 
-// ReadPacket reads a protocol packet from the provided connection.
+// Packet is the common interface for MySQL wire protocol packets.
+type Packet interface {
+	// Bytes returns the packet as raw bytes.
+	Bytes() []byte
+}
+
+// packet is embedded in all packets to provide common methods.
+type packet struct {
+	// bytes is the entire packet bytes.
+	bytes []byte
+}
+
+// Bytes returns the packet as raw bytes.
+func (p *packet) Bytes() []byte {
+	return p.bytes
+}
+
+// Generic represents a generic packet other than the ones recognized below.
+type Generic struct {
+	packet
+}
+
+// OK represents the OK packet.
+//
+// https://dev.mysql.com/doc/internals/en/packet-OK_Packet.html
+type OK struct {
+	packet
+}
+
+// Error represents the ERR packet.
+//
+// https://dev.mysql.com/doc/internals/en/packet-ERR_Packet.html
+type Error struct {
+	packet
+}
+
+// Query represents the COM_QUERY command.
+//
+// https://dev.mysql.com/doc/internals/en/com-query.html
+type Query struct {
+	packet
+	// query is the query text.
+	query string
+}
+
+// Query returns the query text.
+func (p *Query) Query() string {
+	return p.query
+}
+
+// Quit represents the COM_QUIT command.
+//
+// https://dev.mysql.com/doc/internals/en/com-quit.html
+type Quit struct {
+	packet
+}
+
+// ParsePacket reads a protocol packet from the connection and returns it
+// in a parsed form. See ReadPacket below for the packet structure.
+func ParsePacket(conn net.Conn) (Packet, error) {
+	packetBytes, packetType, err := ReadPacket(conn)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	packet := packet{
+		packetBytes,
+	}
+	switch packetType {
+	case mysql.OK_HEADER:
+		return &OK{
+			packet: packet,
+		}, nil
+	case mysql.ERR_HEADER:
+		return &Error{
+			packet: packet,
+		}, nil
+	case mysql.COM_QUERY:
+		// Be a bit paranoid and make sure the packet is not truncated.
+		if len(packetBytes) < 5 {
+			return nil, trace.BadParameter("failed to parse COM_QUERY packet: %v", packetBytes)
+		}
+		return &Query{
+			packet: packet,
+			// 4-byte packet header + 1-byte payload header, then query text.
+			query: string(packetBytes[5:]),
+		}, nil
+	case mysql.COM_QUIT:
+		return &Quit{
+			packet: packet,
+		}, nil
+	}
+	return &Generic{
+		packet: packet,
+	}, nil
+}
+
+// ReadPacket reads a protocol packet from the connection.
 //
 // MySQL wire protocol packet has the following structure:
 //

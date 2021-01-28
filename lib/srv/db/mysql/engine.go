@@ -26,7 +26,6 @@ import (
 	"github.com/gravitational/teleport/lib/srv/db/mysql/protocol"
 
 	"github.com/siddontang/go-mysql/client"
-	"github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/packet"
 	"github.com/siddontang/go-mysql/server"
 
@@ -117,9 +116,19 @@ func (e *Engine) HandleConnection(ctx context.Context, sessionCtx *common.Sessio
 	return nil
 }
 
+// checkAccess does authorization check for MySQL connection about to be established.
 func (e *Engine) checkAccess(sessionCtx *common.Session) error {
-	err := sessionCtx.Checker.CheckAccessToDatabase(sessionCtx.Server,
-		sessionCtx.DatabaseName, sessionCtx.DatabaseUser)
+	// In MySQL, unlike Postgres, "database" and "schema" are the same thing
+	// and there's no good way to prevent users from performing cross-database
+	// queries once they're connected, apart from granting proper privileges
+	// in MySQL itself.
+	//
+	// As such, checking db_names for MySQL is quite pointless so we only
+	// check db_users. In future, if we implement some sort of access controls
+	// on queries, we might be able to restrict db_names as well e.g. by
+	// detecting full-qualified table names like db.table, until then the
+	// proper way is to use MySQL grants system.
+	err := sessionCtx.Checker.CheckAccessToDatabaseUser(sessionCtx.Server, sessionCtx.DatabaseUser)
 	if err != nil {
 		if err := e.Audit.OnSessionStart(e.Context, *sessionCtx, err); err != nil {
 			e.Log.WithError(err).Error("Failed to emit audit event.")
@@ -142,6 +151,7 @@ func (e *Engine) connect(ctx context.Context, sessionCtx *common.Session) (*clie
 			return nil, trace.Wrap(err)
 		}
 	}
+	// TODO(r0mant): Set CLIENT_INTERACTIVE flag on the client?
 	conn, err := client.Connect(sessionCtx.Server.GetURI(),
 		sessionCtx.DatabaseUser,
 		password,
@@ -161,23 +171,23 @@ func (e *Engine) receiveFromClient(clientConn, serverConn net.Conn, clientErrCh 
 	log := e.Log.WithField("from", "client")
 	defer log.Debug("Stop receiving from client.")
 	for {
-		packet, packetType, err := protocol.ReadPacket(clientConn)
+		packet, err := protocol.ParsePacket(clientConn)
 		if err != nil {
 			log.WithError(err).Error("Failed to read client packet.")
 			clientErrCh <- err
 			return
 		}
-		switch packetType {
-		case mysql.COM_QUERY:
-			err := e.Audit.OnQuery(e.Context, *sessionCtx, string(packet[5:]))
+		switch pkt := packet.(type) {
+		case *protocol.Query:
+			err := e.Audit.OnQuery(e.Context, *sessionCtx, pkt.Query())
 			if err != nil {
 				log.WithError(err).Error("Failed to emit audit event.")
 			}
-		case mysql.COM_QUIT:
+		case *protocol.Quit:
 			clientErrCh <- nil
 			return
 		}
-		_, err = protocol.WritePacket(packet, serverConn)
+		_, err = protocol.WritePacket(packet.Bytes(), serverConn)
 		if err != nil {
 			log.WithError(err).Error("Failed to write server packet.")
 			clientErrCh <- err
@@ -192,7 +202,7 @@ func (e *Engine) receiveFromServer(serverConn, clientConn net.Conn, serverErrCh 
 	log := e.Log.WithField("from", "server")
 	defer log.Debug("Stop receiving from server.")
 	for {
-		packet, _, err := protocol.ReadPacket(serverConn)
+		packet, err := protocol.ParsePacket(serverConn)
 		if err != nil {
 			if strings.Contains(err.Error(), teleport.UseOfClosedNetworkConnection) {
 				log.Debug("Server connection closed.")
@@ -203,7 +213,7 @@ func (e *Engine) receiveFromServer(serverConn, clientConn net.Conn, serverErrCh 
 			serverErrCh <- err
 			return
 		}
-		_, err = protocol.WritePacket(packet, clientConn)
+		_, err = protocol.WritePacket(packet.Bytes(), clientConn)
 		if err != nil {
 			log.WithError(err).Error("Failed to write client packet.")
 			serverErrCh <- err
