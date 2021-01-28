@@ -29,7 +29,6 @@ import (
 	"github.com/gravitational/teleport/api/types"
 	"github.com/gravitational/teleport/api/types/wrappers"
 	"github.com/gravitational/teleport/lib/defaults"
-	"github.com/gravitational/teleport/lib/modules"
 	"github.com/gravitational/teleport/lib/tlsca"
 	"github.com/gravitational/teleport/lib/utils"
 	"github.com/gravitational/teleport/lib/utils/parse"
@@ -41,21 +40,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/vulcand/predicate"
 )
-
-// AdminUserRules provides access to the default set of rules assigned to
-// all users.
-//
-// DELETE IN: 5.1.0.
-//
-// Once RBAC is open sourced, remove this and rename "ExtendedAdminUserRules" to
-// "AdminUserRules".
-var AdminUserRules = []Rule{
-	NewRule(KindRole, RW()),
-	NewRule(KindAuthConnector, RW()),
-	NewRule(KindSession, RO()),
-	NewRule(KindTrustedCluster, RW()),
-	NewRule(KindEvent, RO()),
-}
 
 // ExtendedAdminUserRules provides access to the default set of rules assigned to
 // all users.
@@ -110,13 +94,7 @@ func RoleNameForCertAuthority(name string) string {
 // NewAdminRole is the default admin role for all local users if another role
 // is not explicitly assigned (this role applies to all users in OSS version).
 func NewAdminRole() Role {
-	// DELETE IN: 5.1.0
-	//
-	// Only needed until 5.1 when user and token management will be added to OSS.
-	adminRules := CopyRulesSlice(AdminUserRules)
-	if modules.GetModules().ExtendAdminUserRules() {
-		adminRules = CopyRulesSlice(ExtendedAdminUserRules)
-	}
+	adminRules := CopyRulesSlice(ExtendedAdminUserRules)
 
 	role := &RoleV3{
 		Kind:    KindRole,
@@ -145,9 +123,9 @@ func NewAdminRole() Role {
 			},
 		},
 	}
-	role.SetLogins(Allow, modules.GetModules().DefaultAllowedLogins())
-	role.SetKubeUsers(Allow, modules.GetModules().DefaultKubeUsers())
-	role.SetKubeGroups(Allow, modules.GetModules().DefaultKubeGroups())
+	role.SetLogins(Allow, []string{teleport.TraitInternalLoginsVariable, teleport.Root})
+	role.SetKubeUsers(Allow, []string{teleport.TraitInternalKubeUsersVariable})
+	role.SetKubeGroups(Allow, []string{teleport.TraitInternalKubeGroupsVariable})
 	return role
 }
 
@@ -200,7 +178,7 @@ func RoleForUser(u User) Role {
 				AppLabels:        Labels{Wildcard: []string{Wildcard}},
 				KubernetesLabels: Labels{Wildcard: []string{Wildcard}},
 				DatabaseLabels:   Labels{Wildcard: []string{Wildcard}},
-				Rules:            CopyRulesSlice(AdminUserRules),
+				Rules:            CopyRulesSlice(ExtendedAdminUserRules),
 			},
 		},
 	}

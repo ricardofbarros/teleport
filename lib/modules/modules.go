@@ -38,10 +38,10 @@ type Features struct {
 	OIDC bool
 	// SAML enables SAML connectors
 	SAML bool
-	// FIPS enables fips mode controls
-	FIPS bool
-	// AccessWorkflows enables advanced access workflows
-	AccessWorkflows bool
+	// AccessControls enables FIPS access controls
+	AccessControls bool
+	// AdvancedAccessWorkflows enables advanced access workflows
+	AdvancedAccessWorkflows bool
 }
 
 // Modules defines interface that external libraries can implement customizing

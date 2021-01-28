@@ -1,5 +1,5 @@
 /*
-Copyright 2015-2020 Gravitational, Inc.
+Copyright 2015-2021 Gravitational, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@ import (
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/events"
 	"github.com/gravitational/teleport/lib/jwt"
+	"github.com/gravitational/teleport/lib/modules"
 	"github.com/gravitational/teleport/lib/services"
 	"github.com/gravitational/teleport/lib/session"
 	"github.com/gravitational/teleport/lib/utils"
@@ -1224,6 +1225,10 @@ func (a *ServerWithRoles) UpsertOIDCConnector(ctx context.Context, connector ser
 	if err := a.authConnectorAction(defaults.Namespace, services.KindOIDC, services.VerbUpdate); err != nil {
 		return trace.Wrap(err)
 	}
+	if modules.GetModules().Features().OIDC == false {
+		return trace.AccessDenied("OIDC is only available in enterprise subscriptions")
+	}
+
 	return a.authServer.UpsertOIDCConnector(ctx, connector)
 }
 
@@ -1277,6 +1282,9 @@ func (a *ServerWithRoles) CreateSAMLConnector(ctx context.Context, connector ser
 	if err := a.authConnectorAction(defaults.Namespace, services.KindSAML, services.VerbCreate); err != nil {
 		return trace.Wrap(err)
 	}
+	if modules.GetModules().Features().SAML == false {
+		return trace.AccessDenied("SAML is only available in enterprise subscriptions")
+	}
 	return a.authServer.UpsertSAMLConnector(ctx, connector)
 }
 
@@ -1287,6 +1295,9 @@ func (a *ServerWithRoles) UpsertSAMLConnector(ctx context.Context, connector ser
 	}
 	if err := a.authConnectorAction(defaults.Namespace, services.KindSAML, services.VerbUpdate); err != nil {
 		return trace.Wrap(err)
+	}
+	if modules.GetModules().Features().SAML == false {
+		return trace.AccessDenied("SAML is only available in enterprise subscriptions")
 	}
 	return a.authServer.UpsertSAMLConnector(ctx, connector)
 }
@@ -1640,6 +1651,20 @@ func (a *ServerWithRoles) UpsertRole(ctx context.Context, role services.Role) er
 	}
 	if err := a.action(defaults.Namespace, services.KindRole, services.VerbUpdate); err != nil {
 		return trace.Wrap(err)
+	}
+
+	// Some options are only available with enterprise subscription
+	features := modules.GetModules().Features()
+	options := role.GetOptions()
+
+	switch {
+	case features.AccessControls == false && options.MaxSessions > 0:
+		return trace.AccessDenied(
+			"role option max_sessions is only available in enterprise subscriptions")
+	case features.AdvancedAccessWorkflows == false &&
+		(options.RequestAccess == types.RequestStrategyReason || options.RequestAccess == types.RequestStrategyAlways):
+		return trace.AccessDenied(
+			"role option request_access: %v is only available in enterprise subscriptions", options.RequestAccess)
 	}
 
 	return a.authServer.upsertRole(ctx, role)

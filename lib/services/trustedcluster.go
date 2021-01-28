@@ -17,9 +17,6 @@ limitations under the License.
 package services
 
 import (
-	"github.com/gravitational/teleport"
-	"github.com/gravitational/teleport/lib/modules"
-
 	"github.com/gravitational/trace"
 )
 
@@ -31,16 +28,7 @@ func ValidateTrustedCluster(tc TrustedCluster) error {
 
 	// we are not mentioning Roles parameter because we are deprecating it
 	if len(tc.GetRoles()) == 0 && len(tc.GetRoleMap()) == 0 {
-		if err := modules.GetModules().EmptyRolesHandler(); err != nil {
-			return trace.Wrap(err)
-		}
-		// OSS teleport uses 'admin' by default:
-		tc.SetRoleMap(RoleMap{
-			RoleMapping{
-				Remote: teleport.AdminRoleName,
-				Local:  []string{teleport.AdminRoleName},
-			},
-		})
+		return trace.BadParameter("missing 'role_map' parameter")
 	}
 
 	return nil
