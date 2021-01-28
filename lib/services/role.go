@@ -652,9 +652,15 @@ type AccessChecker interface {
 	CheckAccessToDatabaseServer(server types.DatabaseServer) error
 	// CheckAccessToDatabase checks whether a user can log into a particular
 	// database as a particular user within the specified database proxy.
+	//
+	// Used as an authorization check for databases where it makes sense to
+	// check both db_names and db_users such as Postgres.
 	CheckAccessToDatabase(server types.DatabaseServer, dbName, dbUser string) error
 	// CheckAccessToDatabaseUser checks whether a user can log into a
 	// database using a particular database account.
+	//
+	// Used as an authorization check for databases where it doesn't make
+	// sense to check db_names such as MySQL.
 	CheckAccessToDatabaseUser(server types.DatabaseServer, dbUser string) error
 }
 

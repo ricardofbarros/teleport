@@ -88,36 +88,29 @@ func ParsePacket(conn net.Conn) (Packet, error) {
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	packet := packet{
-		packetBytes,
-	}
+
+	packet := packet{packetBytes}
+
 	switch packetType {
 	case mysql.OK_HEADER:
-		return &OK{
-			packet: packet,
-		}, nil
+		return &OK{packet: packet}, nil
+
 	case mysql.ERR_HEADER:
-		return &Error{
-			packet: packet,
-		}, nil
+		return &Error{packet: packet}, nil
+
 	case mysql.COM_QUERY:
 		// Be a bit paranoid and make sure the packet is not truncated.
 		if len(packetBytes) < 5 {
 			return nil, trace.BadParameter("failed to parse COM_QUERY packet: %v", packetBytes)
 		}
-		return &Query{
-			packet: packet,
-			// 4-byte packet header + 1-byte payload header, then query text.
-			query: string(packetBytes[5:]),
-		}, nil
+		// 4-byte packet header + 1-byte payload header, then query text.
+		return &Query{packet: packet, query: string(packetBytes[5:])}, nil
+
 	case mysql.COM_QUIT:
-		return &Quit{
-			packet: packet,
-		}, nil
+		return &Quit{packet: packet}, nil
 	}
-	return &Generic{
-		packet: packet,
-	}, nil
+
+	return &Generic{packet: packet}, nil
 }
 
 // ReadPacket reads a protocol packet from the connection.

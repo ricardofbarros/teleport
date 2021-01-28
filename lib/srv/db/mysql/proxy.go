@@ -134,7 +134,6 @@ func (p *Proxy) waitForOK(server *server.Conn, serviceConn net.Conn) error {
 	if err != nil {
 		return trace.Wrap(err)
 	}
-	p.Log.Debugf("Received packet: %s", packet)
 	switch packet.(type) {
 	case *protocol.OK:
 		err = server.WriteOK(nil)
