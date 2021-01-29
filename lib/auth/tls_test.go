@@ -37,6 +37,7 @@ import (
 	"github.com/gravitational/teleport"
 	"github.com/gravitational/teleport/api/client"
 	"github.com/gravitational/teleport/api/client/proto"
+	"github.com/gravitational/teleport/api/types"
 	"github.com/gravitational/teleport/lib/backend"
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/events"
@@ -1016,7 +1017,10 @@ func (s *TLSSuite) TestPasswordCRUD(c *check.C) {
 	err = clt.UpsertPassword("user1", pass)
 	c.Assert(err, check.IsNil)
 
-	err = s.server.Auth().UpsertTOTP("user1", otpSecret)
+	dev, err := types.NewTOTPDevice("otp", otpSecret, s.clock.Now())
+	c.Assert(err, check.IsNil)
+	ctx := context.Background()
+	err = s.server.Auth().UpsertMFADevice(ctx, "user1", dev)
 	c.Assert(err, check.IsNil)
 
 	validToken, err := totp.GenerateCode(otpSecret, s.server.Clock().Now())
@@ -1362,7 +1366,10 @@ func (s *TLSSuite) TestOTPCRUD(c *check.C) {
 	// upsert a password and totp secret
 	err = clt.UpsertPassword("user1", pass)
 	c.Assert(err, check.IsNil)
-	err = s.server.Auth().UpsertTOTP(user, otpSecret)
+	dev, err := types.NewTOTPDevice("otp", otpSecret, s.clock.Now())
+	c.Assert(err, check.IsNil)
+	ctx := context.Background()
+	err = s.server.Auth().UpsertMFADevice(ctx, user, dev)
 	c.Assert(err, check.IsNil)
 
 	// a completely invalid token should return access denied
@@ -2188,7 +2195,10 @@ func (s *TLSSuite) TestAuthenticateWebUserOTP(c *check.C) {
 	err = s.server.Auth().UpsertPassword(user, pass)
 	c.Assert(err, check.IsNil)
 
-	err = s.server.Auth().UpsertTOTP(user, otpSecret)
+	dev, err := types.NewTOTPDevice("otp", otpSecret, s.clock.Now())
+	c.Assert(err, check.IsNil)
+	ctx := context.Background()
+	err = s.server.Auth().UpsertMFADevice(ctx, user, dev)
 	c.Assert(err, check.IsNil)
 
 	// create a valid otp token

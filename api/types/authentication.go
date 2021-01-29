@@ -30,8 +30,9 @@ import (
 	"github.com/gravitational/teleport/api/defaults"
 	"github.com/gravitational/teleport/api/utils"
 
+	"github.com/gogo/protobuf/jsonpb"
 	"github.com/gravitational/trace"
-	"github.com/pquerna/otp/totp"
+	"github.com/pborman/uuid"
 	"github.com/tstranex/u2f"
 )
 
@@ -295,86 +296,6 @@ type U2F struct {
 	Facets []string `json:"facets,omitempty"`
 }
 
-// GetPubKeyDecoded decodes the DER encoded PubKey field into an `ecdsa.PublicKey` instance.
-func (reg *U2FRegistrationData) GetPubKeyDecoded() (*ecdsa.PublicKey, error) {
-	pubKeyI, err := x509.ParsePKIXPublicKey(reg.PubKey)
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	pubKey, ok := pubKeyI.(*ecdsa.PublicKey)
-	if !ok {
-		return nil, trace.Errorf("expected *ecdsa.PublicKey, got %T", pubKeyI)
-	}
-	return pubKey, nil
-}
-
-// Check validates basic u2f registration values
-func (reg *U2FRegistrationData) Check() error {
-	if len(reg.KeyHandle) < 1 {
-		return trace.BadParameter("missing u2f key handle")
-	}
-	if len(reg.PubKey) < 1 {
-		return trace.BadParameter("missing u2f pubkey")
-	}
-	if _, err := reg.GetPubKeyDecoded(); err != nil {
-		return trace.BadParameter("invalid u2f pubkey")
-	}
-	return nil
-}
-
-// Equals checks equality (nil safe).
-func (reg *U2FRegistrationData) Equals(other *U2FRegistrationData) bool {
-	if (reg == nil) || (other == nil) {
-		return (reg == nil) && (other == nil)
-	}
-	if !bytes.Equal(reg.Raw, other.Raw) {
-		return false
-	}
-	if !bytes.Equal(reg.KeyHandle, other.KeyHandle) {
-		return false
-	}
-	return bytes.Equal(reg.PubKey, other.PubKey)
-}
-
-// GetU2FRegistration decodes the u2f registration data and builds the expected
-// registration object.  Returns (nil,nil) if no registration data is present.
-func (l *LocalAuthSecrets) GetU2FRegistration() (*u2f.Registration, error) {
-	if l.U2FRegistration == nil {
-		return nil, nil
-	}
-	pubKey, err := l.U2FRegistration.GetPubKeyDecoded()
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	return &u2f.Registration{
-		Raw:       l.U2FRegistration.Raw,
-		KeyHandle: l.U2FRegistration.KeyHandle,
-		PubKey:    *pubKey,
-	}, nil
-}
-
-// SetU2FRegistration encodes and stores a u2f registration.  Use nil to
-// delete an existing registration.
-func (l *LocalAuthSecrets) SetU2FRegistration(reg *u2f.Registration) error {
-	if reg == nil {
-		l.U2FRegistration = nil
-		return nil
-	}
-	pubKeyDer, err := x509.MarshalPKIXPublicKey(&reg.PubKey)
-	if err != nil {
-		return trace.Wrap(err)
-	}
-	l.U2FRegistration = &U2FRegistrationData{
-		Raw:       reg.Raw,
-		KeyHandle: reg.KeyHandle,
-		PubKey:    pubKeyDer,
-	}
-	if err := l.U2FRegistration.Check(); err != nil {
-		return trace.Wrap(err)
-	}
-	return nil
-}
-
 // Check validates local auth secret members.
 func (l *LocalAuthSecrets) Check() error {
 	if len(l.PasswordHash) > 0 {
@@ -382,15 +303,15 @@ func (l *LocalAuthSecrets) Check() error {
 			return trace.BadParameter("invalid password hash")
 		}
 	}
-	if len(l.TOTPKey) > 0 {
-		if _, err := totp.GenerateCode(l.TOTPKey, time.Time{}); err != nil {
-			return trace.BadParameter("invalid TOTP key")
+	mfaNames := make(map[string]struct{}, len(l.MFA))
+	for _, d := range l.MFA {
+		if err := d.CheckAndSetDefaults(); err != nil {
+			return trace.BadParameter("MFA device named %q is invalid: %v", d.Metadata.Name, err)
 		}
-	}
-	if l.U2FRegistration != nil {
-		if err := l.U2FRegistration.Check(); err != nil {
-			return trace.Wrap(err)
+		if _, ok := mfaNames[d.Metadata.Name]; ok {
+			return trace.BadParameter("MFA device named %q already exists", d.Metadata.Name)
 		}
+		mfaNames[d.Metadata.Name] = struct{}{}
 	}
 	return nil
 }
@@ -398,18 +319,240 @@ func (l *LocalAuthSecrets) Check() error {
 // Equals checks equality (nil safe).
 func (l *LocalAuthSecrets) Equals(other *LocalAuthSecrets) bool {
 	if (l == nil) || (other == nil) {
-		return (l == nil) && (other == nil)
+		return l == other
 	}
 	if !bytes.Equal(l.PasswordHash, other.PasswordHash) {
 		return false
 	}
-	if !(l.TOTPKey == other.TOTPKey) {
+	if len(l.MFA) != len(other.MFA) {
 		return false
 	}
-	if !(l.U2FCounter == other.U2FCounter) {
+	mfa := make(map[string]*MFADevice, len(l.MFA))
+	for i, d := range l.MFA {
+		mfa[d.Id] = l.MFA[i]
+	}
+	mfaOther := make(map[string]*MFADevice, len(other.MFA))
+	for i, d := range other.MFA {
+		mfaOther[d.Id] = other.MFA[i]
+	}
+	for id, d := range mfa {
+		od, ok := mfaOther[id]
+		if !ok {
+			return false
+		}
+		if !d.Equals(od) {
+			return false
+		}
+	}
+	return true
+}
+
+// newMFADevice creates a new MFADevice with the given name. Caller must set
+// the Device field in the returned MFADevice.
+func newMFADevice(name string, addedAt time.Time) *MFADevice {
+	return &MFADevice{
+		Kind: KindMFADevice,
+		Metadata: Metadata{
+			Name: name,
+		},
+		Id:       uuid.New(),
+		AddedAt:  addedAt,
+		LastUsed: addedAt,
+	}
+}
+
+func (d *MFADevice) CheckAndSetDefaults() error {
+	if err := d.Metadata.CheckAndSetDefaults(); err != nil {
+		return trace.Wrap(err)
+	}
+	if d.Kind == "" {
+		return trace.BadParameter("MFADevice missing Kind field")
+	}
+	if d.Version == "" {
+		d.Version = V1
+	}
+	if d.Id == "" {
+		return trace.BadParameter("MFADevice missing ID field")
+	}
+	if d.AddedAt.IsZero() {
+		return trace.BadParameter("MFADevice missing AddedAt field")
+	}
+	if d.LastUsed.IsZero() {
+		return trace.BadParameter("MFADevice missing LastUsed field")
+	}
+	if d.LastUsed.Before(d.AddedAt) {
+		return trace.BadParameter("MFADevice LastUsed field must be earlier than AddedAt")
+	}
+	if d.Device == nil {
+		return trace.BadParameter("MFADevice missing Device field")
+	}
+	switch dd := d.Device.(type) {
+	case *MFADevice_Totp:
+		if err := dd.Totp.Check(); err != nil {
+			return trace.Wrap(err)
+		}
+	case *MFADevice_U2F:
+		if err := dd.U2F.Check(); err != nil {
+			return trace.Wrap(err)
+		}
+	default:
+		return trace.BadParameter("MFADevice has Device field of unknown type %T", d.Device)
+	}
+	return nil
+}
+
+func (d *MFADevice) Equals(other *MFADevice) bool {
+	if (d == nil) || (other == nil) {
+		return d == other
+	}
+	if d.Kind != other.Kind {
 		return false
 	}
-	return l.U2FRegistration.Equals(other.U2FRegistration)
+	if d.SubKind != other.SubKind {
+		return false
+	}
+	if d.Version != other.Version {
+		return false
+	}
+	if d.Metadata.Name != other.Metadata.Name {
+		return false
+	}
+	if d.Id != other.Id {
+		return false
+	}
+	if !d.AddedAt.Equal(other.AddedAt) {
+		return false
+	}
+	// Ignore LastUsed, it's a very dynamic field.
+	if !d.GetTotp().Equals(other.GetTotp()) {
+		return false
+	}
+	if !d.GetU2F().Equals(other.GetU2F()) {
+		return false
+	}
+	return true
+}
+
+func (d *MFADevice) GetKind() string                       { return d.Kind }
+func (d *MFADevice) GetSubKind() string                    { return d.SubKind }
+func (d *MFADevice) SetSubKind(sk string)                  { d.SubKind = sk }
+func (d *MFADevice) GetVersion() string                    { return d.Version }
+func (d *MFADevice) GetMetadata() Metadata                 { return d.Metadata }
+func (d *MFADevice) GetName() string                       { return d.Metadata.GetName() }
+func (d *MFADevice) SetName(n string)                      { d.Metadata.SetName(n) }
+func (d *MFADevice) GetResourceID() int64                  { return d.Metadata.ID }
+func (d *MFADevice) SetResourceID(id int64)                { d.Metadata.SetID(id) }
+func (d *MFADevice) Expiry() time.Time                     { return d.Metadata.Expiry() }
+func (d *MFADevice) SetExpiry(exp time.Time)               { d.Metadata.SetExpiry(exp) }
+func (d *MFADevice) SetTTL(clock Clock, ttl time.Duration) { d.Metadata.SetTTL(clock, ttl) }
+
+func (d *MFADevice) MarshalJSON() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := (&jsonpb.Marshaler{}).Marshal(buf, d)
+	return buf.Bytes(), trace.Wrap(err)
+}
+
+func (d *MFADevice) UnmarshalJSON(buf []byte) error {
+	return jsonpb.Unmarshal(bytes.NewReader(buf), d)
+}
+
+// NewTOTPDevice creates a TOTP MFADevice from the given key.
+func NewTOTPDevice(name, key string, addedAt time.Time) (*MFADevice, error) {
+	d := newMFADevice(name, addedAt)
+	d.Device = &MFADevice_Totp{Totp: &TOTPDevice{
+		Key: key,
+	}}
+	if err := d.CheckAndSetDefaults(); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	return d, nil
+}
+
+func (d *TOTPDevice) Check() error {
+	if d.Key == "" {
+		return trace.BadParameter("TOTPDevice missing Key field")
+	}
+	return nil
+}
+
+func (d *TOTPDevice) Equals(other *TOTPDevice) bool {
+	if (d == nil) || (other == nil) {
+		return d == other
+	}
+	return d.Key == other.Key
+}
+
+// NewU2FDevice creates a U2F MFADevice object from a completed U2F
+// registration.
+func NewU2FDevice(name string, reg *u2f.Registration, addedAt time.Time) (*MFADevice, error) {
+	d := newMFADevice(name, addedAt)
+	pubKey, err := x509.MarshalPKIXPublicKey(&reg.PubKey)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	d.Device = &MFADevice_U2F{U2F: &U2FDevice{
+		KeyHandle: reg.KeyHandle,
+		PubKey:    pubKey,
+	}}
+	if err := d.CheckAndSetDefaults(); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	return d, nil
+}
+
+func (d *U2FDevice) Check() error {
+	if len(d.KeyHandle) == 0 {
+		return trace.BadParameter("U2FDevice missing KeyHandle field")
+	}
+	if len(d.PubKey) == 0 {
+		return trace.BadParameter("U2FDevice missing PubKey field")
+	}
+	if _, err := d.GetPubKeyDecoded(); err != nil {
+		return trace.BadParameter("U2FDevice PubKey is invalid: %v", err)
+	}
+	return nil
+}
+
+// GetPubKeyDecoded returns the ECDSA public key of this U2F device
+// registration.
+func (d *U2FDevice) GetPubKeyDecoded() (*ecdsa.PublicKey, error) {
+	pubKeyI, err := x509.ParsePKIXPublicKey(d.PubKey)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	pubKey, ok := pubKeyI.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, trace.BadParameter("expected *ecdsa.PublicKey, got %T", pubKeyI)
+	}
+	return pubKey, nil
+}
+
+// Equals checks equality (nil safe).
+func (d *U2FDevice) Equals(other *U2FDevice) bool {
+	if (d == nil) || (other == nil) {
+		return d == other
+	}
+	if !bytes.Equal(d.KeyHandle, other.KeyHandle) {
+		return false
+	}
+	if !bytes.Equal(d.PubKey, other.PubKey) {
+		return false
+	}
+	// Ignore the counter, it's a very dynamic value.
+	return true
+}
+
+// GetU2FRegistration decodes the u2f registration data and builds the expected
+// registration object.
+func (d *U2FDevice) GetU2FRegistration() (*u2f.Registration, error) {
+	pubKey, err := d.GetPubKeyDecoded()
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	return &u2f.Registration{
+		KeyHandle: d.KeyHandle,
+		PubKey:    *pubKey,
+	}, nil
 }
 
 // AuthPreferenceSpecSchemaTemplate is JSON schema for AuthPreferenceSpec
@@ -460,7 +603,48 @@ const LocalAuthSecretsSchema = `{
 				"pubkey": {"type": "string"}
 			}
 		},
-		"u2f_counter": {"type": "number"}
+		"u2f_counter": {"type": "number"},
+		"mfa": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"kind": {"type": "string"},
+					"subKind": {"type": "string"},
+					"version": {"type": "string"},
+					"metadata": {
+						"type": "object",
+						"additionalProperties": false,
+						"properties": {
+							"Name": {"type": "string"},
+							"Namespace": {"type": "string"}
+						}
+					},
+					"id": {"type": "string"},
+					"name": {"type": "string"},
+					"addedAt": {"type": "string"},
+					"lastUsed": {"type": "string"},
+					"totp": {
+						"type": "object",
+						"additionalProperties": false,
+						"properties": {
+							"key": {"type": "string"}
+						}
+					},
+					"u2f": {
+						"type": "object",
+						"additionalProperties": false,
+						"properties": {
+							"raw": {"type": "string"},
+							"keyHandle": {"type": "string"},
+							"pubKey": {"type": "string"},
+							"counter": {"type": "number"}
+						}
+					}
+				}
+			}
+		}
 	}
 }`
 

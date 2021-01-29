@@ -7,6 +7,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/gravitational/teleport"
+	"github.com/gravitational/teleport/api/types"
 	"github.com/gravitational/teleport/lib/auth/u2f"
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/events"
@@ -198,10 +199,23 @@ func (s *Server) CheckOTP(user string, otpToken string) error {
 			return trace.Wrap(err)
 		}
 	case teleport.TOTP:
-		otpSecret, err := s.GetTOTP(user)
+		ctx := context.TODO()
+		devs, err := s.GetMFADevices(ctx, user)
 		if err != nil {
 			return trace.Wrap(err)
 		}
+		// TODO(awly): support multiple TOTP devices.
+		var otpDev *types.TOTPDevice
+		for _, dev := range devs {
+			if dev.GetTotp() != nil {
+				otpDev = dev.GetTotp()
+				break
+			}
+		}
+		if otpDev == nil {
+			return trace.NotFound("user has no TOTP devices registered")
+		}
+		otpSecret := otpDev.Key
 
 		// get the previously used token to mitigate token replay attacks
 		usedToken, err := s.GetUsedTOTPToken(user)
@@ -337,18 +351,21 @@ func (s *Server) changeUserSecondFactor(req ChangePasswordWithTokenRequest, Rese
 		return trace.Wrap(err)
 	}
 
+	ctx := context.TODO()
 	switch cap.GetSecondFactor() {
 	case teleport.OFF:
 		return nil
 	case teleport.OTP, teleport.TOTP, teleport.HOTP:
-		secrets, err := s.Identity.GetResetPasswordTokenSecrets(context.TODO(), req.TokenID)
+		secrets, err := s.Identity.GetResetPasswordTokenSecrets(ctx, req.TokenID)
 		if err != nil {
 			return trace.Wrap(err)
 		}
 
-		// TODO: create a separate method to validate TOTP without inserting it first
-		err = s.UpsertTOTP(username, secrets.GetOTPKey())
+		dev, err := types.NewTOTPDevice("otp", secrets.GetOTPKey(), s.clock.Now())
 		if err != nil {
+			return trace.Wrap(err)
+		}
+		if err := s.UpsertMFADevice(ctx, username, dev); err != nil {
 			return trace.Wrap(err)
 		}
 
@@ -364,11 +381,13 @@ func (s *Server) changeUserSecondFactor(req ChangePasswordWithTokenRequest, Rese
 			return trace.Wrap(err)
 		}
 
-		return u2f.RegisterVerify(u2f.RegisterVerifyParams{
+		return u2f.RegisterVerify(ctx, u2f.RegisterVerifyParams{
+			DevName:                "u2f",
 			ChallengeStorageKey:    req.TokenID,
 			RegistrationStorageKey: username,
 			Resp:                   req.U2FRegisterResponse,
 			Storage:                s.Identity,
+			Clock:                  s.GetClock(),
 		})
 	}
 

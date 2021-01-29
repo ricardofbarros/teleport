@@ -44,6 +44,7 @@ import (
 	"golang.org/x/text/encoding/unicode"
 
 	"github.com/gravitational/teleport"
+	"github.com/gravitational/teleport/api/types"
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/auth/mocku2f"
 	"github.com/gravitational/teleport/lib/auth/u2f"
@@ -402,8 +403,12 @@ func (s *WebSuite) createUser(c *C, user string, login string, pass string, otpS
 	err = s.server.Auth().UpsertPassword(user, []byte(pass))
 	c.Assert(err, IsNil)
 
-	err = s.server.Auth().UpsertTOTP(user, otpSecret)
-	c.Assert(err, IsNil)
+	if otpSecret != "" {
+		dev, err := types.NewTOTPDevice("otp", otpSecret, s.clock.Now())
+		c.Assert(err, IsNil)
+		err = s.server.Auth().UpsertMFADevice(context.Background(), user, dev)
+		c.Assert(err, IsNil)
+	}
 }
 
 func (s *WebSuite) TestSAMLSuccess(c *C) {
@@ -650,7 +655,9 @@ func (s *WebSuite) TestWebSessionsBadInput(c *C) {
 	err := s.server.Auth().UpsertPassword(user, []byte(pass))
 	c.Assert(err, IsNil)
 
-	err = s.server.Auth().UpsertTOTP(user, otpSecret)
+	dev, err := types.NewTOTPDevice("otp", otpSecret, s.clock.Now())
+	c.Assert(err, IsNil)
+	err = s.server.Auth().UpsertMFADevice(context.Background(), user, dev)
 	c.Assert(err, IsNil)
 
 	// create valid token

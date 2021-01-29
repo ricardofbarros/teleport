@@ -31,6 +31,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/gravitational/teleport"
+	"github.com/gravitational/teleport/api/types"
 	"github.com/gravitational/teleport/lib/auth/u2f"
 	"github.com/gravitational/teleport/lib/backend"
 	"github.com/gravitational/teleport/lib/defaults"
@@ -776,10 +777,19 @@ func (s *ServicesTestSuite) U2FCRUD(c *check.C) {
 		KeyHandle: []byte("gn49UWxiMRrReCfH6yJBrF2WS75T4nZbnlTk2s3WIYhzQCaH7QfCFtXZb3Qbv1zEhhLZJUgUB2pNMNe89clt4A=="),
 		PubKey:    *pubkey,
 	}
-	err = s.WebS.UpsertU2FRegistration(user1, &registration)
+	dev, err := types.NewU2FDevice("u2f", &registration, s.Clock.Now())
+	c.Assert(err, check.IsNil)
+	ctx := context.Background()
+	err = s.WebS.UpsertMFADevice(ctx, user1, dev)
 	c.Assert(err, check.IsNil)
 
-	registrationOut, err := s.WebS.GetU2FRegistration(user1)
+	devs, err := s.WebS.GetMFADevices(ctx, user1)
+	c.Assert(err, check.IsNil)
+	c.Assert(devs, check.HasLen, 1)
+	// Raw registration output is not stored - it's not used for
+	// authentication.
+	registration.Raw = nil
+	registrationOut, err := devs[0].GetU2F().GetU2FRegistration()
 	c.Assert(err, check.IsNil)
 	c.Assert(&registration, check.DeepEquals, registrationOut)
 }

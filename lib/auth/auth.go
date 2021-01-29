@@ -825,7 +825,7 @@ func (a *Server) U2FSignRequest(user string, password []byte) (*u2f.Authenticate
 		return nil, trace.Wrap(err)
 	}
 
-	return u2f.AuthenticateInit(u2f.AuthenticateInitParams{
+	return u2f.AuthenticateInit(context.TODO(), u2f.AuthenticateInitParams{
 		AppConfig:  *u2fConfig,
 		StorageKey: user,
 		Storage:    a.Identity,
@@ -843,11 +843,28 @@ func (a *Server) CheckU2FSignResponse(user string, response *u2f.AuthenticateCha
 		return trace.Wrap(err)
 	}
 
-	return u2f.AuthenticateVerify(u2f.AuthenticateVerifyParams{
-		Resp:       *response,
-		StorageKey: user,
-		Storage:    a.Identity,
-	})
+	ctx := context.TODO()
+	devs, err := a.GetMFADevices(ctx, user)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	for _, dev := range devs {
+		if dev.GetU2F() == nil {
+			continue
+		}
+		if err := u2f.AuthenticateVerify(ctx, u2f.AuthenticateVerifyParams{
+			Dev:        dev,
+			Resp:       *response,
+			StorageKey: user,
+			Storage:    a.Identity,
+			Clock:      a.GetClock(),
+		}); err != nil {
+			log.WithError(err).Debugf("failed U2F challenge validation using device %q", dev.Id)
+			continue
+		}
+		return nil
+	}
+	return trace.AccessDenied("U2F validation failed")
 }
 
 // ExtendWebSession creates a new web session for a user based on a valid previous sessionID.

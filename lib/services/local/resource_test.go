@@ -22,12 +22,12 @@ import (
 	"crypto/x509"
 	"encoding/base32"
 	"encoding/base64"
-	"fmt"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/gravitational/teleport/api/types"
 	"github.com/gravitational/teleport/lib/auth/u2f"
 	"github.com/gravitational/teleport/lib/backend"
 	"github.com/gravitational/teleport/lib/backend/lite"
@@ -46,7 +46,6 @@ type ResourceSuite struct {
 	bk backend.Backend
 }
 
-var _ = fmt.Printf
 var _ = check.Suite(&ResourceSuite{})
 
 func (r *ResourceSuite) SetUpSuite(c *check.C) {
@@ -227,11 +226,16 @@ func localAuthSecretsTestCase(c *check.C) services.LocalAuthSecrets {
 	var err error
 	auth.PasswordHash, err = bcrypt.GenerateFromPassword([]byte("insecure"), bcrypt.MinCost)
 	c.Assert(err, check.IsNil)
-	auth.TOTPKey = base32.StdEncoding.EncodeToString([]byte("abc123"))
-	auth.U2FCounter = 7
-	reg := u2fRegTestCase(c)
-	err = auth.SetU2FRegistration(&reg)
+
+	dev, err := types.NewTOTPDevice("otp", base32.StdEncoding.EncodeToString([]byte("abc123")), time.Now())
 	c.Assert(err, check.IsNil)
+	auth.MFA = append(auth.MFA, dev)
+
+	reg := u2fRegTestCase(c)
+	dev, err = types.NewU2FDevice("u2f", &reg, time.Now())
+	c.Assert(err, check.IsNil)
+	dev.GetU2F().Counter = 7
+	auth.MFA = append(auth.MFA, dev)
 	return auth
 }
 
