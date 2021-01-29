@@ -240,7 +240,7 @@ func (e *Engine) makeClientReady(client *pgproto3.Backend, hijackedConn *pgconn.
 	// ReadyForQuery indicates that the start-up is completed and the
 	// frontend can now issue commands.
 	e.Log.Debug("Sending ReadyForQuery")
-	if err := client.Send(&pgproto3.ReadyForQuery{}); err != nil {
+	if err := client.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'}); err != nil {
 		return trace.Wrap(err)
 	}
 	return nil
