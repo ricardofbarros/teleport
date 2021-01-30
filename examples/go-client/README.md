@@ -2,9 +2,6 @@
 
 ### Introduction
 
-Teleport Auth Server has an API which hasn't been officially documented (yet).
-Both `tctl` and `tsh` use the Auth API to perform various actions
-
 This program demonstrates how to...
 
 1. Authenticate against the Auth API using certificates.
@@ -20,18 +17,26 @@ Auth API clients must perform two-way authentication using x509 certificates:
 2. They must offer their x509 certificate, which has been previously issued
    by the auth sever.
 
-Start up a teleport auth server and then run the following commands to create an `api-user` with a signed certificate. Make sure to run this from the `go-client` directory for proper output.
+There are a few ways to generate the certificates needed to authenticate the client. This
+demo uses the default profile, which is generated with `tsh login`.
+
+### API Authorization
+
+The API will authorize requests based on the certs provided. Since these credentials
+are created by `tsh login`, the API will authorize requests based on that login.
+
+Note: role based access control is an enterprise feature. All users will be treated 
+as the `admin` role in non-enterprise instances of Teleport. 
+
+### Run the Demo
+
+```bash
+$ tsh login
+$ go run .
+```
 
 ```bash
 $ tctl create -f api-admin.yaml
 $ mkdir -p certs
 $ tctl auth sign --format=tls --ttl=87600h --user=api-admin --out=certs/api-admin
-```
-
-### Demo
-
-With the user and certificate created, you can run the go example.
-
-```bash
-$ go run .
 ```

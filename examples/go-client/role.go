@@ -7,10 +7,11 @@ import (
 
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/services"
+	"github.com/gravitational/trace"
 )
 
 // rolesCRUD performs each roles crud function as an example
-func roleCRUD(ctx context.Context, client *auth.Client) {
+func roleCRUD(ctx context.Context, client *auth.Client) error {
 	// create a new auditor role which has very limited permissions
 	role, err := services.NewRole("auditor", services.RoleSpecV3{
 		Options: services.RoleOptions{
@@ -27,13 +28,11 @@ func roleCRUD(ctx context.Context, client *auth.Client) {
 		},
 	})
 	if err != nil {
-		log.Printf("Failed to make new role %v", err)
-		return
+		trace.WrapWithMessage(err, "Failed to make new roe")
 	}
 
 	if err = client.UpsertRole(ctx, role); err != nil {
-		log.Printf("Failed to create role: %v", err)
-		return
+		trace.WrapWithMessage(err, "Failed to create role")
 	}
 
 	log.Printf("Created Role: %v", role.GetName())
@@ -42,7 +41,7 @@ func roleCRUD(ctx context.Context, client *auth.Client) {
 	defer func() {
 		// delete the auditor role we just created
 		if err = client.DeleteRole(ctx, "auditor"); err != nil {
-			log.Printf("Failed to delete role: %v", err)
+			log.Fatal(trace.WrapWithMessage(err, "Failed to delete role"))
 		}
 
 		log.Printf("Deleted role")
@@ -51,20 +50,19 @@ func roleCRUD(ctx context.Context, client *auth.Client) {
 	// retrieve auditor role
 	role, err = client.GetRole("auditor")
 	if err != nil {
-		log.Printf("Failed to retrieve role for updating: %v", err)
-		return
+		trace.WrapWithMessage(err, "Failed to retrieve role for updatine")
 	}
 
-	log.Printf("Retrieved Role: %v", role.GetName())
+	log.Printf("Retrieved role: %v", role.GetName())
 
 	// update the auditor role's ttl to one day
 	role.SetOptions(services.RoleOptions{
 		MaxSessionTTL: services.Duration(time.Hour * 24),
 	})
 	if err = client.UpsertRole(ctx, role); err != nil {
-		log.Printf("Failed to update role: %v", err)
-		return
+		trace.WrapWithMessage(err, "Failed to update role")
 	}
 
 	log.Printf("Updated role")
+	return nil
 }

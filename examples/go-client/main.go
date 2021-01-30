@@ -18,36 +18,43 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"log"
 
 	"github.com/gravitational/teleport/api/client"
 	"github.com/gravitational/teleport/lib/auth"
-	log "github.com/sirupsen/logrus"
+	"github.com/gravitational/teleport/lib/services"
+	"github.com/gravitational/trace"
 )
 
 func main() {
+	ctx := context.Background()
 	log.Printf("Starting Teleport client...")
-	config := client.Config{
-		Addrs: []string{"127.0.0.1:3025"},
-		// Credentials: client.PathCreds("certs/api-admin"),
+
+	client, err := auth.NewClient(client.Config{
+		// TODO: Can Addrs be loaded from somewhere?
+		Addrs:       []string{"proxy.example.com:3025"},
 		Credentials: client.ProfileCreds(),
 		// Credentials: client.IdentityCreds("/home/bjoerger/dev"),
-	}
-
-	client, err := auth.NewClient(config)
+		// Credentials: client.PathCreds("certs/api-admin"),
+	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
 	defer client.Close()
 
-	ctx := context.Background()
+	// create user example, which will be used to make an access request
+	user, _ := services.NewUser("example")
+	if err := client.CreateUser(ctx, user); err != nil {
+		log.Fatal("Failed to create new user")
+	}
 
-	fmt.Println("")
-	roleCRUD(ctx, client)
+	// defer deletion in case of an error below
+	defer func() {
+		// delete user
+		if err := client.DeleteUser(ctx, user.GetName()); err != nil {
+			log.Fatal(trace.WrapWithMessage(err, "Failed to delete user"))
+		}
 
-	fmt.Println("")
-	tokenCRUD(ctx, client)
-
-	fmt.Println("")
-	accessWorkflow(ctx, client)
+		log.Println("Deleted user")
+	}()
 }
