@@ -27,6 +27,7 @@ import (
 
 	"github.com/gravitational/kingpin"
 	"github.com/gravitational/teleport"
+	"github.com/gravitational/teleport/api/types"
 	"github.com/gravitational/teleport/lib/asciitable"
 	"github.com/gravitational/teleport/lib/auth"
 	"github.com/gravitational/teleport/lib/service"
@@ -50,12 +51,15 @@ type AccessRequestCommand struct {
 
 	dryRun bool
 
+	approve, deny bool
+
 	requestList    *kingpin.CmdClause
 	requestApprove *kingpin.CmdClause
 	requestDeny    *kingpin.CmdClause
 	requestCreate  *kingpin.CmdClause
 	requestDelete  *kingpin.CmdClause
 	requestCaps    *kingpin.CmdClause
+	requestReview  *kingpin.CmdClause
 }
 
 // Initialize allows AccessRequestCommand to plug itself into the CLI parser
@@ -91,6 +95,11 @@ func (c *AccessRequestCommand) Initialize(app *kingpin.Application, config *serv
 	c.requestCaps = requests.Command("capabilities", "Check a user's access capabilities").Alias("caps").Hidden()
 	c.requestCaps.Arg("username", "Name of target user").Required().StringVar(&c.user)
 	c.requestCaps.Flag("format", "Output format, 'text' or 'json'").Hidden().Default(teleport.Text).StringVar(&c.format)
+	c.requestReview = requests.Command("review", "Review an access request")
+	c.requestReview.Arg("request-id", "ID of target request").Required().StringVar(&c.reqIDs)
+	c.requestReview.Flag("author", "Username of reviewer").Required().StringVar(&c.user)
+	c.requestReview.Flag("approve", "Review proposes approval").BoolVar(&c.approve)
+	c.requestReview.Flag("deny", "Review proposes denial").BoolVar(&c.deny)
 }
 
 // TryRun takes the CLI command as an argument (like "access-request list") and executes it.
@@ -108,6 +117,8 @@ func (c *AccessRequestCommand) TryRun(cmd string, client auth.ClientI) (match bo
 		err = c.Delete(client)
 	case c.requestCaps.FullCommand():
 		err = c.Caps(client)
+	case c.requestReview.FullCommand():
+		err = c.Review(client)
 	default:
 		return false, nil
 	}
@@ -213,7 +224,7 @@ func (c *AccessRequestCommand) Create(client auth.ClientI) error {
 	req.SetRequestReason(c.reason)
 
 	if c.dryRun {
-		err = services.ValidateAccessRequest(client, req, services.ExpandRoles(true), services.ApplySystemAnnotations(true))
+		err = services.ValidateAccessRequest(client, req, services.ExpandVars(true))
 		if err != nil {
 			return trace.Wrap(err)
 		}
@@ -267,6 +278,39 @@ func (c *AccessRequestCommand) Caps(client auth.ClientI) error {
 	default:
 		return trace.BadParameter("unknown format %q, must be one of [%q, %q]", c.format, teleport.Text, teleport.JSON)
 	}
+}
+
+func (c *AccessRequestCommand) Review(client auth.ClientI) error {
+	if c.approve == c.deny {
+		return trace.BadParameter("must supply exactly one of '--approve' or '--deny'")
+	}
+
+	var state types.RequestState
+	switch {
+	case c.approve:
+		state = types.RequestState_APPROVED
+	case c.deny:
+		state = types.RequestState_DENIED
+	}
+
+	ctx := context.TODO()
+
+	req, err := client.SubmitAccessReview(ctx, types.AccessReviewSubmission{
+		RequestID: strings.Split(c.reqIDs, ",")[0],
+		Review: types.AccessReview{
+			Author: c.user,
+			State:  state,
+		},
+	})
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	out, err := json.MarshalIndent(req, "", "  ")
+	if err != nil {
+		return trace.Wrap(err, "failed to marshal request")
+	}
+	fmt.Printf("%s\n", out)
+	return nil
 }
 
 // PrintAccessRequests prints access requests

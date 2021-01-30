@@ -71,7 +71,7 @@ type testPack struct {
 
 	usersS         services.UsersService
 	accessS        services.Access
-	dynamicAccessS services.DynamicAccess
+	dynamicAccessS services.DynamicAccessCore
 	presenceS      services.Presence
 	appSessionS    services.AppSession
 }

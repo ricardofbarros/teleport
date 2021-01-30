@@ -82,8 +82,8 @@ func NewServer(cfg *InitConfig, opts ...ServerOption) (*Server, error) {
 	if cfg.Access == nil {
 		cfg.Access = local.NewAccessService(cfg.Backend)
 	}
-	if cfg.DynamicAccess == nil {
-		cfg.DynamicAccess = local.NewDynamicAccessService(cfg.Backend)
+	if cfg.DynamicAccessExt == nil {
+		cfg.DynamicAccessExt = local.NewDynamicAccessService(cfg.Backend)
 	}
 	if cfg.ClusterConfiguration == nil {
 		cfg.ClusterConfiguration = local.NewClusterConfigurationService(cfg.Backend)
@@ -128,7 +128,7 @@ func NewServer(cfg *InitConfig, opts ...ServerOption) (*Server, error) {
 			Provisioner:          cfg.Provisioner,
 			Identity:             cfg.Identity,
 			Access:               cfg.Access,
-			DynamicAccess:        cfg.DynamicAccess,
+			DynamicAccessExt:     cfg.DynamicAccessExt,
 			ClusterConfiguration: cfg.ClusterConfiguration,
 			IAuditLog:            cfg.AuditLog,
 			Events:               cfg.Events,
@@ -150,7 +150,7 @@ type Services struct {
 	services.Provisioner
 	services.Identity
 	services.Access
-	services.DynamicAccess
+	services.DynamicAccessExt
 	services.ClusterConfiguration
 	services.Events
 	events.IAuditLog
@@ -1630,10 +1630,8 @@ func (a *Server) upsertRole(ctx context.Context, role services.Role) error {
 
 func (a *Server) CreateAccessRequest(ctx context.Context, req services.AccessRequest) error {
 	err := services.ValidateAccessRequest(a, req,
-		// if request is in state pending, role expansion must be applied
-		services.ExpandRoles(req.GetState().IsPending()),
-		// always apply system annotations before storing new requests
-		services.ApplySystemAnnotations(true),
+		// if request is in state pending, variable expansion must be applied
+		services.ExpandVars(req.GetState().IsPending()),
 	)
 	if err != nil {
 		return trace.Wrap(err)
@@ -1659,7 +1657,7 @@ func (a *Server) CreateAccessRequest(ctx context.Context, req services.AccessReq
 			req.SetExpiry(pexp)
 		}
 	}
-	if err := a.DynamicAccess.CreateAccessRequest(ctx, req); err != nil {
+	if err := a.DynamicAccessExt.CreateAccessRequest(ctx, req); err != nil {
 		return trace.Wrap(err)
 	}
 	err = a.emitter.EmitAuditEvent(a.closeCtx, &events.AccessRequestCreate{
@@ -1679,7 +1677,7 @@ func (a *Server) CreateAccessRequest(ctx context.Context, req services.AccessReq
 }
 
 func (a *Server) SetAccessRequestState(ctx context.Context, params services.AccessRequestUpdate) error {
-	if err := a.DynamicAccess.SetAccessRequestState(ctx, params); err != nil {
+	if err := a.DynamicAccessExt.SetAccessRequestState(ctx, params); err != nil {
 		return trace.Wrap(err)
 	}
 	event := &events.AccessRequestCreate{
@@ -1713,6 +1711,30 @@ func (a *Server) SetAccessRequestState(ctx context.Context, params services.Acce
 		log.WithError(err).Warn("Failed to emit access request update event.")
 	}
 	return trace.Wrap(err)
+}
+
+func (a *Server) SubmitAccessReview(ctx context.Context, params types.AccessReviewSubmission) (services.AccessRequest, error) {
+	// set up a checker for the review author
+	checker, err := services.NewReviewPermissionChecker(a, params.Review.Author)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	// don't bother continuing if the author has no allow directives
+	if !checker.HasAllowDirectives() {
+		return nil, trace.AccessDenied("user %q cannot submit reviews", params.Review.Author)
+	}
+
+	// final permission checks and review application must be done by the local backend
+	// service, as their validity depends upon optimistic locking.
+	req, err := a.DynamicAccessExt.ApplyAccessReview(ctx, params, checker)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	// TODO(fspmarshall): emit audit event here
+
+	return req, nil
 }
 
 func (a *Server) GetAccessCapabilities(ctx context.Context, req services.AccessCapabilitiesRequest) (*services.AccessCapabilities, error) {

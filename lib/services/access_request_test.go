@@ -25,6 +25,104 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestThresholdReviewFilter verifies basic filter syntax.
+func TestThresholdReviewFilter(t *testing.T) {
+
+	// test cases consist of a context, and various filter expressions
+	// which should or should not match the supplied context.
+	tts := []struct {
+		ctx       thresholdFilterContext
+		willMatch []string
+		wontMatch []string
+		wontParse []string
+	}{
+		{ // test expected matching behavior against a basic example context
+			ctx: thresholdFilterContext{
+				Reviewer: reviewAuthorContext{
+					Roles: []string{"dev"},
+					Traits: map[string][]string{
+						"teams": []string{"staging-admin"},
+					},
+				},
+				Review: reviewParamsContext{
+					Reason: "ok",
+					Annotations: map[string][]string{
+						"constraints": []string{"no-admin"},
+					},
+				},
+				Request: reviewRequestContext{
+					Roles:  []string{"dev"},
+					Reason: "plz",
+					SystemAnnotations: map[string][]string{
+						"teams": []string{"staging-dev"},
+					},
+				},
+			},
+			willMatch: []string{
+				`contains(reviewer.roles,"dev")`,
+				`contains(reviewer.traits["teams"],"staging-admin") && contains(request.system_annotations["teams"],"staging-dev")`,
+				`!contains(review.annotations["constraints"],"no-admin") || !contains(request.roles,"admin")`,
+				`equals(request.reason,"plz") && equals(review.reason,"ok")`,
+				`contains(reviewer.roles,"admin") || contains(reviewer.roles,"dev")`,
+				`!(contains(reviewer.roles,"foo") || contains(reviewer.roles,"bar"))`,
+			},
+			wontMatch: []string{
+				`contains(reviewer.roles, "admin")`,
+				`equals(request.reason,review.reason)`,
+				`!contains(reviewer.traits["teams"],"staging-admin")`,
+				`contains(reviewer.roles,"admin") && contains(reviewer.roles,"dev")`,
+			},
+		},
+		{ // test expected matching behavior against zero values
+			willMatch: []string{
+				`equals(request.reason,review.reason)`,
+				`!contains(reviewer.traits["teams"],"staging-admin")`,
+				`!contains(review.annotations["constraints"],"no-admin") || !contains(request.roles,"admin")`,
+				`!(contains(reviewer.roles,"foo") || contains(reviewer.roles,"bar"))`,
+			},
+			wontMatch: []string{
+				`contains(reviewer.roles, "admin")`,
+				`contains(reviewer.roles,"admin") && contains(reviewer.roles,"dev")`,
+				`contains(reviewer.roles,"dev")`,
+				`contains(reviewer.traits["teams"],"staging-admin") && contains(request.system_annotations["teams"],"staging-dev")`,
+				`equals(request.reason,"plz") && equals(review.reason,"ok")`,
+				`contains(reviewer.roles,"admin") || contains(reviewer.roles,"dev")`,
+			},
+			// confirm that an empty context can be used to catch syntax errors
+			wontParse: []string{
+				`equals(fully.fake.path,"should-fail")`,
+				`fakefunc(reviewer.roles,"some-role")`,
+				`equals("too","many","params")`,
+				`contains("missing-param")`,
+				`contains(reviewer.partially.fake.path,"also fails")`,
+				`!`,
+				`&& missing-left`,
+			},
+		},
+	}
+
+	for _, tt := range tts {
+		parser, err := NewJSONBoolParser(tt.ctx)
+		require.NoError(t, err)
+		for _, expr := range tt.willMatch {
+			result, err := parser.EvalBoolPredicate(expr)
+			require.NoError(t, err)
+			require.True(t, result)
+		}
+
+		for _, expr := range tt.wontMatch {
+			result, err := parser.EvalBoolPredicate(expr)
+			require.NoError(t, err)
+			require.False(t, result)
+		}
+
+		for _, expr := range tt.wontParse {
+			_, err := parser.EvalBoolPredicate(expr)
+			require.Error(t, err)
+		}
+	}
+}
+
 // TestAccessRequestMarshaling verifies that marshaling/unmarshaling access requests
 // works as expected (failures likely indicate a problem with json schema).
 func TestAccessRequestMarshaling(t *testing.T) {
